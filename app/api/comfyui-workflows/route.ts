@@ -25,13 +25,15 @@ import * as path from 'path';
 
 /** Convert a workflow filename to a human-readable display name */
 function filenameToDisplayName(filename: string): string {
-  return filename
-    .replace(/\.json$/i, '')                    // strip extension
-    .replace(/^comfyui[-_]?/i, '')              // strip leading "comfyui-" or "comfyui_"
-    .replace(/[-_]+/g, ' ')                     // hyphens/underscores → spaces
-    .trim()
-    .replace(/\b\w/g, (c) => c.toUpperCase())   // title-case
-    || 'Default Workflow';                       // fallback if name becomes empty
+  return (
+    filename
+      .replace(/\.json$/i, '') // strip extension
+      .replace(/^comfyui[-_]?/i, '') // strip leading "comfyui-" or "comfyui_"
+      .replace(/[-_]+/g, ' ') // hyphens/underscores → spaces
+      .trim()
+      .replace(/\b\w/g, (c) => c.toUpperCase()) || // title-case
+    'Default Workflow'
+  ); // fallback if name becomes empty
 }
 
 export async function GET() {
@@ -53,7 +55,7 @@ export async function GET() {
         return lower.startsWith('comfyui') || lower.includes('workflow');
       })
       .map((filename) => ({
-        id: filename,                           // used as config.model → workflow filename
+        id: filename, // used as config.model → workflow filename
         name: filenameToDisplayName(filename),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));

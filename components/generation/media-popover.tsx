@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo, Fragment, useEffect  } from 'react';
+import { useState, useCallback, useMemo, Fragment, useEffect } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   Image as ImageIcon,
@@ -140,29 +140,30 @@ export function MediaPopover({ onSettingsOpen }: MediaPopoverProps) {
   );
 
   // ─── Grouped select data (only available providers) ───
- const imageGroups = useMemo(
-  () =>
-    Object.values(IMAGE_PROVIDERS)
-      .filter((p) => cfgOk(imageProvidersConfig, p.id, p.requiresApiKey))
-      .map((p) => {      
-        const items = p.id === 'comfyui-image' 
-          ? comfyWorkflows 
-          : providerModels(p.models, imageProvidersConfig[p.id]);
+  const imageGroups = useMemo(
+    () =>
+      Object.values(IMAGE_PROVIDERS)
+        .filter((p) => cfgOk(imageProvidersConfig, p.id, p.requiresApiKey))
+        .map((p) => {
+          const items =
+            p.id === 'comfyui-image'
+              ? comfyWorkflows
+              : providerModels(p.models, imageProvidersConfig[p.id]);
 
-        return {
-          groupId: p.id,
-          groupName: p.name,
-          groupIcon: IMAGE_PROVIDER_ICONS[p.id],
-          available: true,
-          // Map to a consistent format here
-          items: items.map((m) => ({
-            id: m.id,
-            name: m.name,
-          })),
-        };
-      }),
-  [cfgOk, imageProvidersConfig, comfyWorkflows],
-);
+          return {
+            groupId: p.id,
+            groupName: p.name,
+            groupIcon: IMAGE_PROVIDER_ICONS[p.id],
+            available: true,
+            // Map to a consistent format here
+            items: items.map((m) => ({
+              id: m.id,
+              name: m.name,
+            })),
+          };
+        }),
+    [cfgOk, imageProvidersConfig, comfyWorkflows],
+  );
 
   const videoGroups = useMemo(
     () =>

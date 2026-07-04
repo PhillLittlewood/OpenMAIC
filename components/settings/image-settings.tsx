@@ -268,11 +268,8 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
           }
           className="h-8"
         />
-        {(() => {          
-          const effectiveBaseUrl =            
-            currentConfig?.baseUrl ||
-            currentProvider?.defaultBaseUrl ||
-            '';
+        {(() => {
+          const effectiveBaseUrl = currentConfig?.baseUrl || currentProvider?.defaultBaseUrl || '';
           if (!effectiveBaseUrl) return null;
           return (
             <p className="text-xs text-muted-foreground break-all">
@@ -343,10 +340,9 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Place workflow JSON files in your{' '}
-            <code className="font-mono">public/</code> folder. The filename becomes the
-            display name — e.g. <code className="font-mono">comfyui-anime-style.json</code>{' '}
-            → &quot;Anime Style&quot;.
+            Place workflow JSON files in your <code className="font-mono">public/</code> folder. The
+            filename becomes the display name — e.g.{' '}
+            <code className="font-mono">comfyui-anime-style.json</code> → &quot;Anime Style&quot;.
           </p>
         </div>
       ) : (

@@ -32,10 +32,13 @@ import { aspectRatioToDimensions, IMAGE_PROVIDERS } from '../image-providers';
 const COMPONENT = 'ComfyUI Image';
 
 const log = {
-  info:  (msg: string) => console.log( `[${new Date().toISOString()}] [INFO]  [${COMPONENT}] ${msg}`),
-  warn:  (msg: string) => console.warn( `[${new Date().toISOString()}] [WARN]  [${COMPONENT}] ${msg}`),
-  error: (msg: string) => console.error(`[${new Date().toISOString()}] [ERROR] [${COMPONENT}] ${msg}`),
-  debug: (msg: string) => console.debug(`[${new Date().toISOString()}] [DEBUG] [${COMPONENT}] ${msg}`),
+  info: (msg: string) => console.log(`[${new Date().toISOString()}] [INFO]  [${COMPONENT}] ${msg}`),
+  warn: (msg: string) =>
+    console.warn(`[${new Date().toISOString()}] [WARN]  [${COMPONENT}] ${msg}`),
+  error: (msg: string) =>
+    console.error(`[${new Date().toISOString()}] [ERROR] [${COMPONENT}] ${msg}`),
+  debug: (msg: string) =>
+    console.debug(`[${new Date().toISOString()}] [DEBUG] [${COMPONENT}] ${msg}`),
 };
 
 // ---------------------------------------------------------------------------
@@ -88,8 +91,8 @@ async function loadWorkflow(
     return JSON.parse(JSON.stringify(config.workflowJson)) as Record<string, unknown>;
   }
 
-  const publicPath = config.workflowPublicPath
-    ?? (config.model ? `/${config.model}` : DEFAULT_WORKFLOW_PUBLIC_PATH);
+  const publicPath =
+    config.workflowPublicPath ?? (config.model ? `/${config.model}` : DEFAULT_WORKFLOW_PUBLIC_PATH);
 
   // Server-side: read from disk (public/ directory relative to cwd)
   if (typeof window === 'undefined') {
@@ -132,15 +135,10 @@ async function loadWorkflow(
  * Walk every node in the workflow and return the id of the first node
  * whose _meta.title matches title (case-insensitive).
  */
-function findNodeIdByTitle(
-  workflow: Record<string, unknown>,
-  title: string,
-): string | undefined {
+function findNodeIdByTitle(workflow: Record<string, unknown>, title: string): string | undefined {
   const lower = title.toLowerCase();
   for (const [id, node] of Object.entries(workflow)) {
-    const meta = (node as Record<string, unknown>)['_meta'] as
-      | Record<string, unknown>
-      | undefined;
+    const meta = (node as Record<string, unknown>)['_meta'] as Record<string, unknown> | undefined;
     if (typeof meta?.title === 'string' && meta.title.toLowerCase() === lower) {
       return id;
     }
@@ -164,11 +162,12 @@ function patchWorkflow(
   options: ImageGenerationOptions,
   maxWidth: number,
 ): void {
-
   // --- Resolve dimensions once -----------------------------------------------
   const dims = options.aspectRatio
     ? aspectRatioToDimensions(options.aspectRatio, maxWidth)
-    : (options.width && options.height ? { width: options.width, height: options.height } : null);
+    : options.width && options.height
+      ? { width: options.width, height: options.height }
+      : null;
 
   // --- Prompt node -----------------------------------------------------------
   // Try "Input Prompt" first, fall back to "String (Multiline - Prompt)"
@@ -185,18 +184,20 @@ function patchWorkflow(
   }
   const promptNode = workflow[promptNodeId] as Record<string, Record<string, unknown>>;
   promptNode.inputs['value'] = options.prompt;
-  log.debug(`Patched prompt node (id: ${promptNodeId}) → "${options.prompt.slice(0, 80)}${options.prompt.length > 80 ? '…' : ''}"`);
+  log.debug(
+    `Patched prompt node (id: ${promptNodeId}) → "${options.prompt.slice(0, 80)}${options.prompt.length > 80 ? '…' : ''}"`,
+  );
 
   // --- Width / Height nodes (preferred) -------------------------------------
-  const widthNodeId  = findNodeIdByTitle(workflow, 'Width');
+  const widthNodeId = findNodeIdByTitle(workflow, 'Width');
   const heightNodeId = findNodeIdByTitle(workflow, 'Height');
 
   if (widthNodeId && heightNodeId) {
     // Explicit Width / Height primitive nodes found — patch them
     if (dims) {
-      const widthNode  = workflow[widthNodeId]  as Record<string, Record<string, unknown>>;
+      const widthNode = workflow[widthNodeId] as Record<string, Record<string, unknown>>;
       const heightNode = workflow[heightNodeId] as Record<string, Record<string, unknown>>;
-      widthNode.inputs['value']  = dims.width;
+      widthNode.inputs['value'] = dims.width;
       heightNode.inputs['value'] = dims.height;
       log.debug(`Patched Width node (id: ${widthNodeId}) → ${dims.width}`);
       log.debug(`Patched Height node (id: ${heightNodeId}) → ${dims.height}`);
@@ -206,20 +207,28 @@ function patchWorkflow(
   } else {
     // Fall back to patching the latent size node directly
     if (widthNodeId || heightNodeId) {
-      log.warn('Only one of "Width"/"Height" nodes found — both are needed. Falling back to latent node.');
+      log.warn(
+        'Only one of "Width"/"Height" nodes found — both are needed. Falling back to latent node.',
+      );
     }
     const latentNodeId = findNodeIdByTitle(workflow, 'Empty Flux 2 Latent');
     if (latentNodeId) {
       const latentNode = workflow[latentNodeId] as Record<string, Record<string, unknown>>;
       if (dims) {
-        latentNode.inputs['width']  = dims.width;
+        latentNode.inputs['width'] = dims.width;
         latentNode.inputs['height'] = dims.height;
-        log.debug(`Patched latent size node (id: ${latentNodeId}) → ${dims.width}×${dims.height} (aspectRatio: ${options.aspectRatio ?? 'none'})`);
+        log.debug(
+          `Patched latent size node (id: ${latentNodeId}) → ${dims.width}×${dims.height} (aspectRatio: ${options.aspectRatio ?? 'none'})`,
+        );
       } else {
-        log.debug(`Latent size node (id: ${latentNodeId}) — no dimensions resolved, using workflow defaults`);
+        log.debug(
+          `Latent size node (id: ${latentNodeId}) — no dimensions resolved, using workflow defaults`,
+        );
       }
     } else {
-      log.warn('No dimension nodes found ("Width"/"Height" or "Empty Flux 2 Latent") — using workflow defaults');
+      log.warn(
+        'No dimension nodes found ("Width"/"Height" or "Empty Flux 2 Latent") — using workflow defaults',
+      );
     }
   }
 
@@ -277,19 +286,14 @@ async function queuePrompt(
 
   if (data.node_errors && Object.keys(data.node_errors).length > 0) {
     log.error(`Node errors returned: ${JSON.stringify(data.node_errors)}`);
-    throw new Error(
-      `ComfyUI reported node errors: ${JSON.stringify(data.node_errors)}`,
-    );
+    throw new Error(`ComfyUI reported node errors: ${JSON.stringify(data.node_errors)}`);
   }
 
   log.info(`Queued successfully — prompt_id: ${data.prompt_id} (queue position: ${data.number})`);
   return data.prompt_id;
 }
 
-async function pollHistory(
-  baseUrl: string,
-  promptId: string,
-): Promise<HistoryEntry | null> {
+async function pollHistory(baseUrl: string, promptId: string): Promise<HistoryEntry | null> {
   const response = await fetch(`${baseUrl}/history/${promptId}`);
   if (!response.ok) return null;
   const data = (await response.json()) as Record<string, HistoryEntry>;
@@ -306,9 +310,7 @@ async function fetchImageAsBase64(
   const response = await fetch(`${baseUrl}/view?${params.toString()}`);
 
   if (!response.ok) {
-    throw new Error(
-      `ComfyUI /view failed (${response.status}) for image "${filename}"`,
-    );
+    throw new Error(`ComfyUI /view failed (${response.status}) for image "${filename}"`);
   }
 
   const buffer = await response.arrayBuffer();
@@ -360,7 +362,9 @@ export async function generateWithComfyuiImage(
 
   log.info(`Starting image generation [baseUrl: ${baseUrl}] [model: ${config.model ?? 'default'}]`);
   log.info(`Prompt: "${options.prompt.slice(0, 120)}${options.prompt.length > 120 ? '…' : ''}"`);
-  log.debug(`Options: ${JSON.stringify({ width: options.width, height: options.height, aspectRatio: options.aspectRatio })}`);
+  log.debug(
+    `Options: ${JSON.stringify({ width: options.width, height: options.height, aspectRatio: options.aspectRatio })}`,
+  );
 
   const startTime = Date.now();
 
@@ -389,17 +393,23 @@ export async function generateWithComfyuiImage(
     entry = await pollHistory(baseUrl, promptId);
 
     if (entry?.status?.completed) {
-      log.info(`Generation complete after ${pollCount} poll(s) (${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
+      log.info(
+        `Generation complete after ${pollCount} poll(s) (${((Date.now() - startTime) / 1000).toFixed(1)}s)`,
+      );
       break;
     }
 
     if (pollCount % 10 === 0) {
-      log.debug(`Still waiting… ${pollCount} polls, ${((Date.now() - startTime) / 1000).toFixed(0)}s elapsed`);
+      log.debug(
+        `Still waiting… ${pollCount} polls, ${((Date.now() - startTime) / 1000).toFixed(0)}s elapsed`,
+      );
     }
   }
 
   if (!entry?.status?.completed) {
-    log.error(`Generation timed out after ${GENERATION_TIMEOUT_MS / 1000}s [prompt_id: ${promptId}]`);
+    log.error(
+      `Generation timed out after ${GENERATION_TIMEOUT_MS / 1000}s [prompt_id: ${promptId}]`,
+    );
     throw new Error(
       `ComfyUI generation timed out after ${GENERATION_TIMEOUT_MS / 1000}s ` +
         `(prompt_id: ${promptId})`,
@@ -437,13 +447,17 @@ export async function generateWithComfyuiImage(
   const totalMs = Date.now() - startTime;
   const dims = options.aspectRatio
     ? aspectRatioToDimensions(options.aspectRatio, maxWidth)
-    : (options.width && options.height ? { width: options.width, height: options.height } : null);
+    : options.width && options.height
+      ? { width: options.width, height: options.height }
+      : null;
 
-  log.info(`Image generation complete — ${imageInfo.filename} (${dims?.width ?? options.width ?? 1024}×${dims?.height ?? options.height ?? 1024}) in ${(totalMs / 1000).toFixed(1)}s`);
+  log.info(
+    `Image generation complete — ${imageInfo.filename} (${dims?.width ?? options.width ?? 1024}×${dims?.height ?? options.height ?? 1024}) in ${(totalMs / 1000).toFixed(1)}s`,
+  );
 
   return {
     base64,
-    width:  dims?.width  ?? options.width  ?? 1024,
+    width: dims?.width ?? options.width ?? 1024,
     height: dims?.height ?? options.height ?? 1024,
   };
 }

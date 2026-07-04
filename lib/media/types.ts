@@ -78,7 +78,7 @@ export type ImageProviderId =
   | 'nano-banana'
   | 'minimax-image'
   | 'grok-image'
-  | 'comfyui-image' 
+  | 'comfyui-image'
   | 'lemonade';
 // Add new image providers below (uncomment and modify):
 // | 'dall-e'
