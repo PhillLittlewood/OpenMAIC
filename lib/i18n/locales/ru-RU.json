@@ -1480,6 +1480,7 @@
     "providerNanoBanana": "Nano Banana (Gemini)",
     "providerMiniMaxImage": "MiniMax Image",
     "providerGrokImage": "Grok Image (xAI)",
+    "providerComfyuiImage": "ComfyUI Image",
     "providerLemonadeImage": "Lemonade Image (Локальный)",
     "testImageGeneration": "Тест генерации изображений",
     "testImageConnectivity": "Тест подключения",

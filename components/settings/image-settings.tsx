@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -18,12 +18,18 @@ import {
   Plus,
   Settings2,
   Trash2,
+  RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ImageProviderId } from '@/lib/media/types';
 
 interface ImageSettingsProps {
   selectedProviderId: ImageProviderId;
+}
+
+interface WorkflowEntry {
+  id: string;
+  name: string;
 }
 
 export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
@@ -44,6 +50,13 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
   const [editingModelIndex, setEditingModelIndex] = useState<number | null>(null);
   const [modelForm, setModelForm] = useState({ id: '', name: '' });
 
+  // ComfyUI workflow list state
+  const [workflows, setWorkflows] = useState<WorkflowEntry[]>([]);
+  const [workflowsLoading, setWorkflowsLoading] = useState(false);
+  const [workflowsError, setWorkflowsError] = useState<string | null>(null);
+
+  const isComfyUI = selectedProviderId === 'comfyui-image';
+
   // Reset test state when provider changes (derived state pattern)
   const [prevSelectedProviderId, setPrevSelectedProviderId] = useState(selectedProviderId);
   if (selectedProviderId !== prevSelectedProviderId) {
@@ -51,6 +64,28 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
     setTestStatus('idle');
     setTestMessage('');
   }
+
+  // Fetch ComfyUI workflows when the provider is selected
+  const fetchWorkflows = useCallback(async () => {
+    setWorkflowsLoading(true);
+    setWorkflowsError(null);
+    try {
+      const res = await fetch('/api/comfyui-workflows');
+      const data = await res.json();
+      setWorkflows(data.workflows || []);
+    } catch (err) {
+      setWorkflowsError(`Failed to load workflows: ${err}`);
+      setWorkflows([]);
+    } finally {
+      setWorkflowsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isComfyUI) {
+      fetchWorkflows();
+    }
+  }, [isComfyUI, fetchWorkflows]);
 
   const currentConfig = imageProvidersConfig[selectedProviderId];
   const currentProvider = IMAGE_PROVIDERS[selectedProviderId];
@@ -149,160 +184,233 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
         </div>
       )}
 
-      {/* Managed providers are admin-owned: the operator's key and base URL are
-          authoritative and not overridable here, so the editing inputs are hidden. */}
-      {!isServerConfigured && (
-        <>
-          {/* API Key + Test inline */}
-          <div className="space-y-2">
-            <Label>API Key</Label>
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Input
-                  name={`image-api-key-${selectedProviderId}`}
-                  type={showApiKey ? 'text' : 'password'}
-                  autoComplete="new-password"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  placeholder={t('settings.enterApiKey')}
-                  value={currentConfig?.apiKey || ''}
-                  onChange={(e) => handleApiKeyChange(e.target.value)}
-                  className="h-8 pr-8"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleTest}
-                disabled={testLoading || (requiresApiKey && !currentConfig?.apiKey)}
-                className="gap-1.5"
-              >
-                {testLoading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <>
-                    <Zap className="h-3.5 w-3.5" />
-                    {t('settings.testConnection')}
-                  </>
-                )}
-              </Button>
-            </div>
-            {testMessage && (
-              <div
-                className={cn(
-                  'rounded-lg p-3 text-sm overflow-hidden',
-                  testStatus === 'success' &&
-                    'bg-green-50 text-green-700 border border-green-200 dark:bg-green-950/50 dark:text-green-400 dark:border-green-800',
-                  testStatus === 'error' &&
-                    'bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/50 dark:text-red-400 dark:border-red-800',
-                )}
-              >
-                <div className="flex items-start gap-2 min-w-0">
-                  {testStatus === 'success' && <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />}
-                  {testStatus === 'error' && <XCircle className="h-4 w-4 mt-0.5 shrink-0" />}
-                  <p className="flex-1 min-w-0 break-all">{testMessage}</p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Base URL */}
-          <div className="space-y-2">
-            <Label>Base URL</Label>
+      {/* API Key + Test inline */}
+      <div className="space-y-2">
+        <Label>API Key</Label>
+        <div className="flex gap-2">
+          <div className="relative flex-1">
             <Input
-              name={`image-base-url-${selectedProviderId}`}
-              type="url"
-              autoComplete="off"
+              name={`image-api-key-${selectedProviderId}`}
+              type={showApiKey ? 'text' : 'password'}
+              autoComplete="new-password"
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
-              value={currentConfig?.baseUrl || ''}
-              onChange={(e) => handleBaseUrlChange(e.target.value)}
-              placeholder={currentProvider?.defaultBaseUrl || t('settings.enterCustomBaseUrl')}
-              className="h-8"
+              placeholder={
+                isServerConfigured ? t('settings.optionalOverride') : t('settings.enterApiKey')
+              }
+              value={currentConfig?.apiKey || ''}
+              onChange={(e) => handleApiKeyChange(e.target.value)}
+              className="h-8 pr-8"
             />
-            {(() => {
-              const effectiveBaseUrl =
-                currentConfig?.baseUrl || currentProvider?.defaultBaseUrl || '';
-              if (!effectiveBaseUrl) return null;
-              return (
-                <p className="text-xs text-muted-foreground break-all">
-                  {t('settings.requestUrl')}: {effectiveBaseUrl}
-                </p>
-              );
-            })()}
+            <button
+              type="button"
+              onClick={() => setShowApiKey(!showApiKey)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
           </div>
-        </>
-      )}
-
-      {/* Model list */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <Label className="text-base">{t('settings.models')}</Label>
-          <Button variant="outline" size="sm" onClick={handleOpenAddModel} className="gap-1.5">
-            <Plus className="h-3.5 w-3.5" />
-            {t('settings.addNewModel')}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleTest}
+            disabled={
+              testLoading || (requiresApiKey && !currentConfig?.apiKey && !isServerConfigured)
+            }
+            className="gap-1.5"
+          >
+            {testLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <>
+                <Zap className="h-3.5 w-3.5" />
+                {t('settings.testConnection')}
+              </>
+            )}
           </Button>
         </div>
-
-        <div className="space-y-1.5">
-          {/* Built-in models */}
-          {builtInModels.map((model) => (
-            <div
-              key={model.id}
-              className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="font-mono text-sm font-medium">{model.name}</div>
-                <div className="text-xs text-muted-foreground font-mono mt-0.5">{model.id}</div>
-              </div>
+        {testMessage && (
+          <div
+            className={cn(
+              'rounded-lg p-3 text-sm overflow-hidden',
+              testStatus === 'success' &&
+                'bg-green-50 text-green-700 border border-green-200 dark:bg-green-950/50 dark:text-green-400 dark:border-green-800',
+              testStatus === 'error' &&
+                'bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/50 dark:text-red-400 dark:border-red-800',
+            )}
+          >
+            <div className="flex items-start gap-2 min-w-0">
+              {testStatus === 'success' && <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />}
+              {testStatus === 'error' && <XCircle className="h-4 w-4 mt-0.5 shrink-0" />}
+              <p className="flex-1 min-w-0 break-all">{testMessage}</p>
             </div>
-          ))}
-
-          {/* Custom models */}
-          {customModels.map((model, index) => (
-            <div
-              key={`custom-${index}`}
-              className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="font-mono text-sm font-medium">{model.name}</div>
-                <div className="text-xs text-muted-foreground font-mono mt-0.5">{model.id}</div>
-              </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 px-2"
-                  onClick={() => handleOpenEditModel(index)}
-                  title={t('settings.editModel')}
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 px-2 text-destructive hover:text-destructive hover:bg-destructive/10"
-                  onClick={() => handleDeleteModel(index)}
-                  title={t('settings.deleteModel')}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
+          </div>
+        )}
       </div>
 
-      {/* Add/Edit Model Dialog */}
+      {/* Base URL */}
+      <div className="space-y-2">
+        <Label>Base URL</Label>
+        <Input
+          name={`image-base-url-${selectedProviderId}`}
+          type="url"
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          value={currentConfig?.baseUrl || ''}
+          onChange={(e) => handleBaseUrlChange(e.target.value)}
+          placeholder={
+            currentConfig?.baseUrl ||
+            currentProvider?.defaultBaseUrl ||
+            t('settings.enterCustomBaseUrl')
+          }
+          className="h-8"
+        />
+        {(() => {          
+          const effectiveBaseUrl =            
+            currentConfig?.baseUrl ||
+            currentProvider?.defaultBaseUrl ||
+            '';
+          if (!effectiveBaseUrl) return null;
+          return (
+            <p className="text-xs text-muted-foreground break-all">
+              {t('settings.requestUrl')}: {effectiveBaseUrl}
+            </p>
+          );
+        })()}
+      </div>
+
+      {/* ── ComfyUI: Workflow list ── */}
+      {isComfyUI ? (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <Label className="text-base">Workflows</Label>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={fetchWorkflows}
+              disabled={workflowsLoading}
+              className="gap-1.5"
+            >
+              {workflowsLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Refresh
+            </Button>
+          </div>
+
+          {workflowsError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/30 p-3 text-sm text-red-700 dark:text-red-300">
+              {workflowsError}
+            </div>
+          )}
+
+          {!workflowsLoading && !workflowsError && workflows.length === 0 && (
+            <div className="rounded-lg border border-border/50 bg-muted/30 p-4 text-sm text-muted-foreground text-center">
+              No workflow JSON files found in <code className="font-mono text-xs">public/</code>.
+              <br />
+              Add a <code className="font-mono text-xs">comfyui-*.json</code> file to get started.
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            {workflows.map((workflow) => (
+              <div
+                key={workflow.id}
+                className={cn(
+                  'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors',
+                  imageModelId === workflow.id
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border/50 bg-card hover:border-border hover:bg-accent/30',
+                )}
+                onClick={() => _setImageModelId(workflow.id)}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium">{workflow.name}</div>
+                  <div className="text-xs text-muted-foreground font-mono mt-0.5">
+                    {workflow.id}
+                  </div>
+                </div>
+                {imageModelId === workflow.id && (
+                  <CheckCircle2 className="h-4 w-4 text-primary shrink-0 ml-2" />
+                )}
+              </div>
+            ))}
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Place workflow JSON files in your{' '}
+            <code className="font-mono">public/</code> folder. The filename becomes the
+            display name — e.g. <code className="font-mono">comfyui-anime-style.json</code>{' '}
+            → &quot;Anime Style&quot;.
+          </p>
+        </div>
+      ) : (
+        /* ── All other providers: standard model list ── */
+        <div className="space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <Label className="text-base">{t('settings.models')}</Label>
+            <Button variant="outline" size="sm" onClick={handleOpenAddModel} className="gap-1.5">
+              <Plus className="h-3.5 w-3.5" />
+              {t('settings.addNewModel')}
+            </Button>
+          </div>
+
+          <div className="space-y-1.5">
+            {/* Built-in models */}
+            {builtInModels.map((model) => (
+              <div
+                key={model.id}
+                className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="font-mono text-sm font-medium">{model.name}</div>
+                  <div className="text-xs text-muted-foreground font-mono mt-0.5">{model.id}</div>
+                </div>
+              </div>
+            ))}
+
+            {/* Custom models */}
+            {customModels.map((model, index) => (
+              <div
+                key={`custom-${index}`}
+                className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="font-mono text-sm font-medium">{model.name}</div>
+                  <div className="text-xs text-muted-foreground font-mono mt-0.5">{model.id}</div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => handleOpenEditModel(index)}
+                    title={t('settings.editModel')}
+                  >
+                    <Settings2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2 text-destructive hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => handleDeleteModel(index)}
+                    title={t('settings.deleteModel')}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Add/Edit Model Dialog — only used for non-ComfyUI providers */}
       <Dialog open={showModelDialog} onOpenChange={setShowModelDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogTitle>

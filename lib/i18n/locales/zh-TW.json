@@ -1392,6 +1392,7 @@
     "providerMiniMaxImage": "MiniMax 圖像",
     "providerLemonadeImage": "Lemonade 圖像（本機）",
     "providerGrokImage": "Grok Image（xAI）",
+    "providerComfyUIImage": "ComfyUI Image",
     "testImageGeneration": "測試圖像生成",
     "testImageConnectivity": "測試連線",
     "imageConnectivitySuccess": "圖像服務連線成功",

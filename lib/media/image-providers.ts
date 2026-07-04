@@ -21,6 +21,7 @@ import {
   testMiniMaxImageConnectivity,
 } from './adapters/minimax-image-adapter';
 import { generateWithGrokImage, testGrokImageConnectivity } from './adapters/grok-image-adapter';
+import { generateWithComfyuiImage, testComfyuiImageConnectivity } from './adapters/comfyui-image-adapter';
 import {
   generateWithLemonadeImage,
   testLemonadeImageConnectivity,
@@ -121,6 +122,17 @@ export const IMAGE_PROVIDERS: Record<ImageProviderId, ImageProviderConfig> = {
     ],
     supportedAspectRatios: ['16:9', '4:3', '1:1', '9:16'],
   },
+  'comfyui-image': {
+    id: 'comfyui-image',
+    name: 'ComfyUI Image',
+    requiresApiKey: false,
+    defaultBaseUrl: 'http://localhost:8188',
+    models: [
+      { id: 'comfyui-image', name: 'ComfyUI Image' },
+    ],
+    supportedAspectRatios: ['16:9', '4:3', '1:1', '9:16'],
+    maxResolution: { width: 1024, height: 1024 },
+  },  
   lemonade: {
     id: 'lemonade',
     name: 'Lemonade',
@@ -152,6 +164,8 @@ export async function testImageConnectivity(
       return testMiniMaxImageConnectivity(config);
     case 'grok-image':
       return testGrokImageConnectivity(config);
+    case 'comfyui-image':
+      return testComfyuiImageConnectivity(config);  
     case 'lemonade':
       return testLemonadeImageConnectivity(config);
     default:
@@ -179,6 +193,8 @@ export async function generateImage(
       return generateWithMiniMaxImage(config, options);
     case 'grok-image':
       return generateWithGrokImage(config, options);
+    case 'comfyui-image':
+      return generateWithComfyuiImage(config, options);
     case 'lemonade':
       return generateWithLemonadeImage(config, options);
     default:
