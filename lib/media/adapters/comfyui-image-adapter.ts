@@ -46,8 +46,10 @@ const log = {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_BASE_URL = 'http://localhost:8188';
+/** Default workflow filename (relative to Next.js public/) */
+const DEFAULT_WORKFLOW_FILENAME = 'comfyui-workflow.json';
 /** Default public path for the workflow JSON (relative to Next.js public/) */
-const DEFAULT_WORKFLOW_PUBLIC_PATH = '/comfyui-workflow.json';
+const DEFAULT_WORKFLOW_PUBLIC_PATH = `/${DEFAULT_WORKFLOW_FILENAME}`;
 /** Polling interval while waiting for the queue to finish (ms) */
 const POLL_INTERVAL_MS = 1500;
 /** Hard timeout for a single generation request (ms) */
@@ -81,6 +83,13 @@ interface ComfyUIImageGenerationConfig extends ImageGenerationConfig {
  * - Browser: fetch() from the Next.js public/ origin
  * - Server (API route): read directly from disk with fs — relative URLs
  *   don't work in Node fetch since there's no browser origin to resolve against
+ *
+ * Security: config.model is client-controlled (it flows straight from the
+ * x-image-model request header). It is never trusted as a raw path — it is
+ * checked against isComfyuiWorkflowFilename() (bare basename, no traversal)
+ * AND against the live directory listing from listComfyuiWorkflowFilenames()
+ * (the same list /api/comfyui-workflows shows the user), before it's used to
+ * build a filesystem path. See lib/media/comfyui-workflows.ts.
  */
 async function loadWorkflow(
   config: ComfyUIImageGenerationConfig,
@@ -91,14 +100,52 @@ async function loadWorkflow(
     return JSON.parse(JSON.stringify(config.workflowJson)) as Record<string, unknown>;
   }
 
-  const publicPath =
-    config.workflowPublicPath ?? (config.model ? `/${config.model}` : DEFAULT_WORKFLOW_PUBLIC_PATH);
-
   // Server-side: read from disk (public/ directory relative to cwd)
   if (typeof window === 'undefined') {
     const fs = await import('fs');
     const path = await import('path');
-    const filePath = path.join(process.cwd(), 'public', publicPath.replace(/^\//, ''));
+    const { isComfyuiWorkflowFilename, listComfyuiWorkflowFilenames } =
+      await import('../comfyui-workflows');
+
+    let filename = DEFAULT_WORKFLOW_FILENAME;
+    if (config.workflowPublicPath) {
+      // Server-set override (e.g. a caller passing workflowJson's sibling
+      // path directly) — not client-controlled, so a plain basename() is
+      // enough here rather than the full allowlist check below.
+      filename = path.basename(config.workflowPublicPath);
+    } else if (config.model) {
+      // Client-controlled (x-image-model header) — must be a safe basename
+      // AND a real file /api/comfyui-workflows would also list. Anything
+      // else is rejected outright rather than silently falling back, so a
+      // caller can't probe the filesystem via unexpected .json files.
+      if (!isComfyuiWorkflowFilename(config.model)) {
+        log.error(`Rejected unsafe workflow identifier: "${config.model}"`);
+        throw new Error(`ComfyUI: "${config.model}" is not a valid workflow filename.`);
+      }
+      const known = await listComfyuiWorkflowFilenames();
+      if (!known.includes(config.model)) {
+        log.error(`Rejected unknown workflow identifier: "${config.model}"`);
+        throw new Error(
+          `ComfyUI: workflow "${config.model}" was not found. ` +
+            'Choose one returned by /api/comfyui-workflows.',
+        );
+      }
+      filename = config.model;
+    }
+
+    const publicDir = path.join(process.cwd(), 'public');
+    const filePath = path.join(publicDir, filename);
+
+    // Defense in depth: even after the allowlist check above, verify the
+    // resolved path is still inside public/ before reading it. path.join
+    // does NOT stop ".." segments from escaping a base directory, so this
+    // check — not the join above — is what actually prevents traversal.
+    const resolvedPublicDir = path.resolve(publicDir) + path.sep;
+    if (!path.resolve(filePath).startsWith(resolvedPublicDir)) {
+      log.error(`Refusing to read outside public/ directory: "${filePath}"`);
+      throw new Error('ComfyUI: resolved workflow path escapes the public/ directory.');
+    }
+
     log.info(`Loading workflow from disk: "${filePath}"`);
     if (!fs.existsSync(filePath)) {
       log.error(`Workflow file not found at "${filePath}"`);
@@ -112,7 +159,19 @@ async function loadWorkflow(
     return JSON.parse(raw) as Record<string, unknown>;
   }
 
-  // Browser-side: fetch from origin
+  // Browser-side: fetch from origin. Same allowlist rule applies.
+  let publicPath = DEFAULT_WORKFLOW_PUBLIC_PATH;
+  if (config.workflowPublicPath) {
+    publicPath = config.workflowPublicPath;
+  } else if (config.model) {
+    const { isComfyuiWorkflowFilename } = await import('../comfyui-workflows');
+    if (!isComfyuiWorkflowFilename(config.model)) {
+      log.error(`Rejected unsafe workflow identifier: "${config.model}"`);
+      throw new Error(`ComfyUI: "${config.model}" is not a valid workflow filename.`);
+    }
+    publicPath = `/${config.model}`;
+  }
+
   const url = `${window.location.origin}${publicPath}`;
   log.info(`Loading workflow from "${url}"`);
   const response = await fetch(url);
@@ -125,9 +184,6 @@ async function loadWorkflow(
   }
 
   log.debug(`Workflow loaded from URL successfully`);
-  return (await response.json()) as Record<string, unknown>;
-
-  log.debug(`Workflow loaded successfully from "${url}"`);
   return (await response.json()) as Record<string, unknown>;
 }
 

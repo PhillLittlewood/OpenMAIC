@@ -38,6 +38,7 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
   const imageModelId = useSettingsStore((state) => state.imageModelId);
   const imageProvidersConfig = useSettingsStore((state) => state.imageProvidersConfig);
   const _setImageModelId = useSettingsStore((state) => state.setImageModelId);
+  const setImageProvider = useSettingsStore((state) => state.setImageProvider);
   const setImageProviderConfig = useSettingsStore((state) => state.setImageProviderConfig);
 
   const [showApiKey, setShowApiKey] = useState(false);
@@ -74,12 +75,12 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
       const data = await res.json();
       setWorkflows(data.workflows || []);
     } catch (err) {
-      setWorkflowsError(`Failed to load workflows: ${err}`);
+      setWorkflowsError(t('settings.comfyuiLoadError').replace('{error}', String(err)));
       setWorkflows([]);
     } finally {
       setWorkflowsLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (isComfyUI) {
@@ -184,106 +185,110 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
         </div>
       )}
 
-      {/* API Key + Test inline */}
-      <div className="space-y-2">
-        <Label>API Key</Label>
-        <div className="flex gap-2">
-          <div className="relative flex-1">
+      {/* Managed providers are admin-owned: the operator's key and base URL
+          are authoritative and not overridable here, so the editing inputs
+          are hidden (server ignores client-sent overrides for these). */}
+      {!isServerConfigured && (
+        <>
+          {/* API Key + Test inline */}
+          <div className="space-y-2">
+            <Label>API Key</Label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  name={`image-api-key-${selectedProviderId}`}
+                  type={showApiKey ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  placeholder={t('settings.enterApiKey')}
+                  value={currentConfig?.apiKey || ''}
+                  onChange={(e) => handleApiKeyChange(e.target.value)}
+                  className="h-8 pr-8"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleTest}
+                disabled={testLoading || (requiresApiKey && !currentConfig?.apiKey)}
+                className="gap-1.5"
+              >
+                {testLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <>
+                    <Zap className="h-3.5 w-3.5" />
+                    {t('settings.testConnection')}
+                  </>
+                )}
+              </Button>
+            </div>
+            {testMessage && (
+              <div
+                className={cn(
+                  'rounded-lg p-3 text-sm overflow-hidden',
+                  testStatus === 'success' &&
+                    'bg-green-50 text-green-700 border border-green-200 dark:bg-green-950/50 dark:text-green-400 dark:border-green-800',
+                  testStatus === 'error' &&
+                    'bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/50 dark:text-red-400 dark:border-red-800',
+                )}
+              >
+                <div className="flex items-start gap-2 min-w-0">
+                  {testStatus === 'success' && <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />}
+                  {testStatus === 'error' && <XCircle className="h-4 w-4 mt-0.5 shrink-0" />}
+                  <p className="flex-1 min-w-0 break-all">{testMessage}</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Base URL */}
+          <div className="space-y-2">
+            <Label>Base URL</Label>
             <Input
-              name={`image-api-key-${selectedProviderId}`}
-              type={showApiKey ? 'text' : 'password'}
-              autoComplete="new-password"
+              name={`image-base-url-${selectedProviderId}`}
+              type="url"
+              autoComplete="off"
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
+              value={currentConfig?.baseUrl || ''}
+              onChange={(e) => handleBaseUrlChange(e.target.value)}
               placeholder={
-                isServerConfigured ? t('settings.optionalOverride') : t('settings.enterApiKey')
+                currentConfig?.baseUrl ||
+                currentProvider?.defaultBaseUrl ||
+                t('settings.enterCustomBaseUrl')
               }
-              value={currentConfig?.apiKey || ''}
-              onChange={(e) => handleApiKeyChange(e.target.value)}
-              className="h-8 pr-8"
+              className="h-8"
             />
-            <button
-              type="button"
-              onClick={() => setShowApiKey(!showApiKey)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            >
-              {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
+            {(() => {
+              const effectiveBaseUrl =
+                currentConfig?.baseUrl || currentProvider?.defaultBaseUrl || '';
+              if (!effectiveBaseUrl) return null;
+              return (
+                <p className="text-xs text-muted-foreground break-all">
+                  {t('settings.requestUrl')}: {effectiveBaseUrl}
+                </p>
+              );
+            })()}
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleTest}
-            disabled={
-              testLoading || (requiresApiKey && !currentConfig?.apiKey && !isServerConfigured)
-            }
-            className="gap-1.5"
-          >
-            {testLoading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <>
-                <Zap className="h-3.5 w-3.5" />
-                {t('settings.testConnection')}
-              </>
-            )}
-          </Button>
-        </div>
-        {testMessage && (
-          <div
-            className={cn(
-              'rounded-lg p-3 text-sm overflow-hidden',
-              testStatus === 'success' &&
-                'bg-green-50 text-green-700 border border-green-200 dark:bg-green-950/50 dark:text-green-400 dark:border-green-800',
-              testStatus === 'error' &&
-                'bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/50 dark:text-red-400 dark:border-red-800',
-            )}
-          >
-            <div className="flex items-start gap-2 min-w-0">
-              {testStatus === 'success' && <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />}
-              {testStatus === 'error' && <XCircle className="h-4 w-4 mt-0.5 shrink-0" />}
-              <p className="flex-1 min-w-0 break-all">{testMessage}</p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Base URL */}
-      <div className="space-y-2">
-        <Label>Base URL</Label>
-        <Input
-          name={`image-base-url-${selectedProviderId}`}
-          type="url"
-          autoComplete="off"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          value={currentConfig?.baseUrl || ''}
-          onChange={(e) => handleBaseUrlChange(e.target.value)}
-          placeholder={
-            currentConfig?.baseUrl ||
-            currentProvider?.defaultBaseUrl ||
-            t('settings.enterCustomBaseUrl')
-          }
-          className="h-8"
-        />
-        {(() => {
-          const effectiveBaseUrl = currentConfig?.baseUrl || currentProvider?.defaultBaseUrl || '';
-          if (!effectiveBaseUrl) return null;
-          return (
-            <p className="text-xs text-muted-foreground break-all">
-              {t('settings.requestUrl')}: {effectiveBaseUrl}
-            </p>
-          );
-        })()}
-      </div>
+        </>
+      )}
 
       {/* ── ComfyUI: Workflow list ── */}
       {isComfyUI ? (
         <div className="space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <Label className="text-base">Workflows</Label>
+            <Label className="text-base">{t('settings.comfyuiWorkflows')}</Label>
             <Button
               variant="outline"
               size="sm"
@@ -296,7 +301,7 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
               ) : (
                 <RefreshCw className="h-3.5 w-3.5" />
               )}
-              Refresh
+              {t('settings.comfyuiRefresh')}
             </Button>
           </div>
 
@@ -308,9 +313,12 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
 
           {!workflowsLoading && !workflowsError && workflows.length === 0 && (
             <div className="rounded-lg border border-border/50 bg-muted/30 p-4 text-sm text-muted-foreground text-center">
-              No workflow JSON files found in <code className="font-mono text-xs">public/</code>.
+              {t('settings.comfyuiNoWorkflowsFoundPrefix')}{' '}
+              <code className="font-mono text-xs">public/</code>.
               <br />
-              Add a <code className="font-mono text-xs">comfyui-*.json</code> file to get started.
+              {t('settings.comfyuiAddWorkflowPrefix')}{' '}
+              <code className="font-mono text-xs">comfyui-*.json</code>{' '}
+              {t('settings.comfyuiAddWorkflowSuffix')}
             </div>
           )}
 
@@ -324,7 +332,17 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
                     ? 'border-primary bg-primary/5'
                     : 'border-border/50 bg-card hover:border-border hover:bg-accent/30',
                 )}
-                onClick={() => _setImageModelId(workflow.id)}
+                onClick={() => {
+                  // Selecting a workflow here must also make ComfyUI the
+                  // active image provider — otherwise the workflow filename
+                  // gets written into imageModelId while a different
+                  // provider (e.g. Seedream) stays active, and that
+                  // provider's next generation call sends this filename as
+                  // its model id. Mirrors the atomic setImageProvider +
+                  // setImageModelId pairing used in media-popover.tsx.
+                  setImageProvider(selectedProviderId);
+                  _setImageModelId(workflow.id);
+                }}
               >
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium">{workflow.name}</div>
@@ -340,8 +358,8 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Place workflow JSON files in your <code className="font-mono">public/</code> folder. The
-            filename becomes the display name — e.g.{' '}
+            {t('settings.comfyuiFolderHintPrefix')} <code className="font-mono">public/</code>{' '}
+            {t('settings.comfyuiFolderHintMiddle')}{' '}
             <code className="font-mono">comfyui-anime-style.json</code> → &quot;Anime Style&quot;.
           </p>
         </div>

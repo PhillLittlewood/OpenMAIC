@@ -130,9 +130,17 @@ export const IMAGE_PROVIDERS: Record<ImageProviderId, ImageProviderConfig> = {
     name: 'ComfyUI Image',
     requiresApiKey: false,
     defaultBaseUrl: 'http://localhost:8188',
-    models: [{ id: 'comfyui-image', name: 'ComfyUI Image' }],
+    // No static models here — real selectable workflows are discovered at
+    // runtime from GET /api/comfyui-workflows (files in public/) and picked
+    // in Settings. A placeholder id like "comfyui-image" doesn't correspond
+    // to any real workflow file, so resolveSelectedModel() would resolve it
+    // to a dead path the first time this provider became active (#P2).
+    // With models: [], imageModelId resolves to '' when this provider is
+    // selected with no workflow chosen yet, and the adapter's loadWorkflow()
+    // falls back to the default comfyui-workflow.json in public/ in that case.
+    models: [],
     supportedAspectRatios: ['16:9', '4:3', '1:1', '9:16'],
-    maxResolution: { width: 1024, height: 1024 },
+    maxResolution: { width: 1920, height: 1920 },
   },
   lemonade: {
     id: 'lemonade',
