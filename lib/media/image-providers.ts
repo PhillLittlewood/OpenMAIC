@@ -136,8 +136,11 @@ export const IMAGE_PROVIDERS: Record<ImageProviderId, ImageProviderConfig> = {
     // to any real workflow file, so resolveSelectedModel() would resolve it
     // to a dead path the first time this provider became active (#P2).
     // With models: [], imageModelId resolves to '' when this provider is
-    // selected with no workflow chosen yet, and the adapter's loadWorkflow()
-    // falls back to the default comfyui-workflow.json in public/ in that case.
+    // selected with no workflow chosen yet. In that case (and on the
+    // autonomous classroom-media path, which has no model id to pass) the
+    // adapter's loadWorkflow() defaults to the first workflow file discovered
+    // in public/ via listComfyuiWorkflowFilenames() — not a hard-coded
+    // filename, since no particular workflow name is guaranteed to exist.
     models: [],
     supportedAspectRatios: ['16:9', '4:3', '1:1', '9:16'],
     maxResolution: { width: 1920, height: 1920 },

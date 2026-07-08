@@ -100,6 +100,42 @@ The workflow JSON must be in **ComfyUI API format** (not the default save format
 4. Select your workflow from the **Workflows** list
 5. Click **Test Connection** to verify ComfyUI is reachable
 
+### Default workflow selection
+
+If no workflow is explicitly selected — for example on the autonomous
+classroom-media generation path, or before you've clicked a workflow in
+Settings — the adapter falls back to the **first workflow file discovered in
+`public/`** (alphabetically by display name). It does **not** rely on any
+hard-coded filename, so you don't need a file called `comfyui-workflow.json`;
+any single `comfyui-*.json` you ship will be used as the default. If `public/`
+contains **no** workflow files at all, generation fails with a clear error
+asking you to add one.
+
+---
+
+## Deployment topology (important for hosted/production)
+
+The default Base URL `http://localhost:8188` assumes **OpenMAIC and ComfyUI run
+on the same host** (the typical local / self-hosted setup).
+
+When OpenMAIC runs with `NODE_ENV=production`, a **client-supplied** Base URL
+(`x-base-url`) that points at `localhost`, `127.0.0.1`, or a private/internal IP
+range is rejected with HTTP 403 by the SSRF guard (`validateUrlForSSRF`). This
+is deliberate and matches the behaviour of the other local providers — it stops
+a browser client from steering server-side requests at internal services.
+
+Practical implications:
+
+- **Same-host / self-hosted:** works out of the box. Server-resolved defaults
+  are not subject to the client-URL SSRF check, so the `localhost:8188` default
+  is fine when OpenMAIC and ComfyUI share a host.
+- **ComfyUI on a different machine in production:** point OpenMAIC at ComfyUI
+  over a **routable, non-private** address (or terminate it behind a reverse
+  proxy on a public hostname). A `localhost`/private URL sent from the browser
+  in production will be refused.
+- **Local development** (`NODE_ENV` ≠ `production`): the SSRF check is skipped,
+  so `localhost` works normally.
+
 ---
 
 ## Performance tips

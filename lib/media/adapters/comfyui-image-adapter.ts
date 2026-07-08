@@ -7,10 +7,12 @@
  * Endpoint: http://localhost:8188  (configurable via baseUrl)
  * No API key required.
  *
- * Workflow loading strategy (browser-safe, no fs/path):
+ * Workflow loading strategy:
  *   1. If config.workflowJson is set (an already-parsed object), use it.
- *   2. Otherwise fetch /comfyui-workflow.json from Next.js public/ folder.
- *      → Place comfyui-workflow.json in your project's public/ directory.
+ *   2. Else if config.model names a workflow, load that file (validated against
+ *      the public/ allowlist server-side).
+ *   3. Else default to the first workflow file discovered in public/.
+ *      → Ship at least one comfyui-*.json in your Next.js public/ directory.
  *
  * Nodes patched at runtime:
  *   "String (Multiline - Prompt)"  → inputs.value  = prompt
@@ -54,7 +56,16 @@ const DEFAULT_WORKFLOW_PUBLIC_PATH = `/${DEFAULT_WORKFLOW_FILENAME}`;
 const POLL_INTERVAL_MS = 1500;
 /** Hard timeout for a single generation request (ms) */
 const GENERATION_TIMEOUT_MS = 300_000; // 5 minutes
-/** Fallback maxWidth if provider has no maxResolution defined */
+/**
+ * Per-request timeout for individual ComfyUI HTTP calls (ms). The 5-minute
+ * bound above is on the *polling loop* only — without this, an awaited call
+ * whose socket connects but never responds (queuePrompt / pollHistory /
+ * fetchImageAsBase64) could hang indefinitely.
+ */
+const FETCH_TIMEOUT_MS = 30_000;
+/** Timeout for the lightweight connectivity probe (ms) */
+const CONNECTIVITY_TIMEOUT_MS = 10_000;
+/** Fallback max dimension if provider has no maxResolution defined */
 const DEFAULT_MAX_WIDTH = 1024;
 
 // ---------------------------------------------------------------------------
@@ -107,7 +118,7 @@ async function loadWorkflow(
     const { isComfyuiWorkflowFilename, listComfyuiWorkflowFilenames } =
       await import('../comfyui-workflows');
 
-    let filename = DEFAULT_WORKFLOW_FILENAME;
+    let filename: string;
     if (config.workflowPublicPath) {
       // Server-set override (e.g. a caller passing workflowJson's sibling
       // path directly) — not client-controlled, so a plain basename() is
@@ -131,6 +142,26 @@ async function loadWorkflow(
         );
       }
       filename = config.model;
+    } else {
+      // No workflow specified. This happens on two real paths:
+      //   1. Classroom / autonomous media generation, which has no model id
+      //      to pass for ComfyUI (IMAGE_PROVIDERS['comfyui-image'].models is []).
+      //   2. The provider is selected in Settings but no workflow has been
+      //      clicked yet, so x-image-model is empty.
+      // Default to the first workflow actually discovered in public/ rather
+      // than a hard-coded name: the set of workflow files is user-supplied and
+      // nothing guarantees any particular filename (e.g. comfyui-workflow.json)
+      // exists. This is the same list /api/comfyui-workflows shows the user.
+      const known = await listComfyuiWorkflowFilenames();
+      if (known.length === 0) {
+        log.error('No ComfyUI workflow files found in public/');
+        throw new Error(
+          'ComfyUI: no workflow JSON files found in the public/ folder. ' +
+            'Add at least one comfyui-*.json workflow — see comfyui-setup-instructions.md.',
+        );
+      }
+      filename = known[0];
+      log.info(`No workflow specified — defaulting to first available: "${filename}"`);
     }
 
     const publicDir = path.join(process.cwd(), 'public');
@@ -159,7 +190,16 @@ async function loadWorkflow(
     return JSON.parse(raw) as Record<string, unknown>;
   }
 
-  // Browser-side: fetch from origin. Same allowlist rule applies.
+  // Browser-side: fetch from origin.
+  //
+  // NOTE: generation always runs server-side (via the API route), so this
+  // branch is currently unreachable for real generations. It enforces the
+  // basename/traversal check (isComfyuiWorkflowFilename) but NOT the live
+  // directory allowlist the server branch uses — listComfyuiWorkflowFilenames()
+  // reads the filesystem and deliberately returns [] in the browser, so there
+  // is nothing to check against here. The basename check is still the
+  // traversal guard; the missing allowlist is an intentional consequence of
+  // this path being client-side, not an oversight.
   let publicPath = DEFAULT_WORKFLOW_PUBLIC_PATH;
   if (config.workflowPublicPath) {
     publicPath = config.workflowPublicPath;
@@ -185,6 +225,49 @@ async function loadWorkflow(
 
   log.debug(`Workflow loaded from URL successfully`);
   return (await response.json()) as Record<string, unknown>;
+}
+
+/**
+ * Resolve the output dimensions for a request, clamped to fit inside the
+ * provider's maxResolution bounding box while preserving aspect ratio.
+ *
+ * aspectRatioToDimensions() always pins width to maxWidth and scales height,
+ * so a portrait ratio overflows the declared max height (e.g. 9:16 at
+ * maxWidth 1920 → 1920×3413, well past a 1920×1920 cap). Feeding that
+ * straight into the latent-size node can OOM or fail generation. Scaling
+ * both axes down by the tighter of the width/height ratios keeps the result
+ * inside maxWidth × maxHeight without distorting the aspect ratio.
+ *
+ * Returns null when no dimensions can be resolved (caller uses workflow
+ * defaults in that case).
+ */
+function resolveDimensions(
+  options: ImageGenerationOptions,
+  maxWidth: number,
+  maxHeight: number,
+): { width: number; height: number } | null {
+  const raw = options.aspectRatio
+    ? aspectRatioToDimensions(options.aspectRatio, maxWidth)
+    : options.width && options.height
+      ? { width: options.width, height: options.height }
+      : null;
+  if (!raw) return null;
+
+  const scale = Math.min(1, maxWidth / raw.width, maxHeight / raw.height);
+  return {
+    width: Math.round(raw.width * scale),
+    height: Math.round(raw.height * scale),
+  };
+}
+
+/**
+ * Safely return a workflow node's `inputs` object, or undefined if the node
+ * is malformed (missing/!object inputs). Guards the direct `node.inputs[...]`
+ * assignments below against a TypeError on a hand-edited workflow file.
+ */
+function nodeInputs(node: unknown): Record<string, unknown> | undefined {
+  const inputs = (node as Record<string, unknown> | undefined)?.['inputs'];
+  return inputs && typeof inputs === 'object' ? (inputs as Record<string, unknown>) : undefined;
 }
 
 /**
@@ -217,13 +300,10 @@ function patchWorkflow(
   workflow: Record<string, unknown>,
   options: ImageGenerationOptions,
   maxWidth: number,
+  maxHeight: number,
 ): void {
-  // --- Resolve dimensions once -----------------------------------------------
-  const dims = options.aspectRatio
-    ? aspectRatioToDimensions(options.aspectRatio, maxWidth)
-    : options.width && options.height
-      ? { width: options.width, height: options.height }
-      : null;
+  // --- Resolve dimensions once (clamped to the provider's max resolution) ----
+  const dims = resolveDimensions(options, maxWidth, maxHeight);
 
   // --- Prompt node -----------------------------------------------------------
   // Try "Input Prompt" first, fall back to "String (Multiline - Prompt)"
@@ -238,8 +318,15 @@ function patchWorkflow(
         'Add a node titled "Input Prompt" (or "String (Multiline - Prompt)") to your workflow.',
     );
   }
-  const promptNode = workflow[promptNodeId] as Record<string, Record<string, unknown>>;
-  promptNode.inputs['value'] = options.prompt;
+  const promptInputs = nodeInputs(workflow[promptNodeId]);
+  if (!promptInputs) {
+    log.error(`Prompt node (id: ${promptNodeId}) has no "inputs" object`);
+    throw new Error(
+      `ComfyUI workflow prompt node (id: ${promptNodeId}) is malformed — it has no "inputs" object. ` +
+        'Re-export the workflow in API format (see comfyui-setup-instructions.md).',
+    );
+  }
+  promptInputs['value'] = options.prompt;
   log.debug(
     `Patched prompt node (id: ${promptNodeId}) → "${options.prompt.slice(0, 80)}${options.prompt.length > 80 ? '…' : ''}"`,
   );
@@ -251,12 +338,16 @@ function patchWorkflow(
   if (widthNodeId && heightNodeId) {
     // Explicit Width / Height primitive nodes found — patch them
     if (dims) {
-      const widthNode = workflow[widthNodeId] as Record<string, Record<string, unknown>>;
-      const heightNode = workflow[heightNodeId] as Record<string, Record<string, unknown>>;
-      widthNode.inputs['value'] = dims.width;
-      heightNode.inputs['value'] = dims.height;
-      log.debug(`Patched Width node (id: ${widthNodeId}) → ${dims.width}`);
-      log.debug(`Patched Height node (id: ${heightNodeId}) → ${dims.height}`);
+      const widthInputs = nodeInputs(workflow[widthNodeId]);
+      const heightInputs = nodeInputs(workflow[heightNodeId]);
+      if (widthInputs && heightInputs) {
+        widthInputs['value'] = dims.width;
+        heightInputs['value'] = dims.height;
+        log.debug(`Patched Width node (id: ${widthNodeId}) → ${dims.width}`);
+        log.debug(`Patched Height node (id: ${heightNodeId}) → ${dims.height}`);
+      } else {
+        log.warn('Width/Height nodes are malformed (missing "inputs") — using workflow defaults');
+      }
     } else {
       log.debug('Width/Height nodes found but no dimensions resolved — using workflow defaults');
     }
@@ -269,12 +360,16 @@ function patchWorkflow(
     }
     const latentNodeId = findNodeIdByTitle(workflow, 'Empty Flux 2 Latent');
     if (latentNodeId) {
-      const latentNode = workflow[latentNodeId] as Record<string, Record<string, unknown>>;
-      if (dims) {
-        latentNode.inputs['width'] = dims.width;
-        latentNode.inputs['height'] = dims.height;
+      const latentInputs = nodeInputs(workflow[latentNodeId]);
+      if (dims && latentInputs) {
+        latentInputs['width'] = dims.width;
+        latentInputs['height'] = dims.height;
         log.debug(
           `Patched latent size node (id: ${latentNodeId}) → ${dims.width}×${dims.height} (aspectRatio: ${options.aspectRatio ?? 'none'})`,
+        );
+      } else if (dims && !latentInputs) {
+        log.warn(
+          `Latent size node (id: ${latentNodeId}) is malformed (missing "inputs") — using workflow defaults`,
         );
       } else {
         log.debug(
@@ -291,10 +386,16 @@ function patchWorkflow(
   // --- KSampler seed ---------------------------------------------------------
   const samplerNodeId = findNodeIdByTitle(workflow, 'KSampler');
   if (samplerNodeId) {
-    const samplerNode = workflow[samplerNodeId] as Record<string, Record<string, unknown>>;
-    const seed = Math.floor(Math.random() * 1e15);
-    samplerNode.inputs['seed'] = seed;
-    log.debug(`Patched KSampler seed (id: ${samplerNodeId}) → ${seed}`);
+    const samplerInputs = nodeInputs(workflow[samplerNodeId]);
+    if (samplerInputs) {
+      const seed = Math.floor(Math.random() * 1e15);
+      samplerInputs['seed'] = seed;
+      log.debug(`Patched KSampler seed (id: ${samplerNodeId}) → ${seed}`);
+    } else {
+      log.warn(
+        `KSampler node (id: ${samplerNodeId}) is malformed (missing "inputs") — seed not randomised`,
+      );
+    }
   } else {
     log.warn('KSampler node not found — seed not randomised');
   }
@@ -317,7 +418,33 @@ interface HistoryEntry {
       images?: Array<{ filename: string; subfolder: string; type: string }>;
     }
   >;
-  status: { status_str: string; completed: boolean };
+  status: {
+    status_str: string;
+    completed: boolean;
+    // ComfyUI records execution events here as [eventName, data] tuples.
+    // On failure an "execution_error" event carries the real reason.
+    messages?: Array<[string, Record<string, unknown>]>;
+  };
+}
+
+/**
+ * Pull a human-readable reason out of a failed history entry's message log.
+ * Returns undefined if no execution_error detail is present.
+ */
+function extractExecutionError(entry: HistoryEntry): string | undefined {
+  const messages = entry.status?.messages;
+  if (!Array.isArray(messages)) return undefined;
+  for (const [event, data] of messages) {
+    if (event === 'execution_error' && data) {
+      const nodeType = typeof data['node_type'] === 'string' ? data['node_type'] : undefined;
+      const exception =
+        typeof data['exception_message'] === 'string' ? data['exception_message'] : undefined;
+      const parts = [nodeType, exception].filter(Boolean);
+      if (parts.length > 0) return parts.join(': ');
+      return 'execution_error';
+    }
+  }
+  return undefined;
 }
 
 async function queuePrompt(
@@ -330,6 +457,7 @@ async function queuePrompt(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt: workflow, client_id: clientId }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -350,10 +478,19 @@ async function queuePrompt(
 }
 
 async function pollHistory(baseUrl: string, promptId: string): Promise<HistoryEntry | null> {
-  const response = await fetch(`${baseUrl}/history/${promptId}`);
-  if (!response.ok) return null;
-  const data = (await response.json()) as Record<string, HistoryEntry>;
-  return data[promptId] ?? null;
+  // A single poll timing out or blipping must not abort the whole generation —
+  // return null so the caller's loop simply tries again on the next interval.
+  try {
+    const response = await fetch(`${baseUrl}/history/${promptId}`, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as Record<string, HistoryEntry>;
+    return data[promptId] ?? null;
+  } catch (err) {
+    log.debug(`Poll request failed (will retry): ${err}`);
+    return null;
+  }
 }
 
 async function fetchImageAsBase64(
@@ -363,13 +500,23 @@ async function fetchImageAsBase64(
   type: string,
 ): Promise<string> {
   const params = new URLSearchParams({ filename, subfolder, type });
-  const response = await fetch(`${baseUrl}/view?${params.toString()}`);
+  const response = await fetch(`${baseUrl}/view?${params.toString()}`, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
 
   if (!response.ok) {
     throw new Error(`ComfyUI /view failed (${response.status}) for image "${filename}"`);
   }
 
   const buffer = await response.arrayBuffer();
+
+  // This runs server-side, so encode with Buffer (single native pass) rather
+  // than a multi-MB per-byte String.fromCharCode loop. The btoa fallback is
+  // retained only to keep this module import-safe in the browser bundle; it
+  // is never exercised in practice because generation runs server-side.
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(buffer).toString('base64');
+  }
   const bytes = new Uint8Array(buffer);
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -390,7 +537,9 @@ export async function testComfyuiImageConnectivity(
   const baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
   log.info(`Testing connectivity to ${baseUrl}`);
   try {
-    const response = await fetch(`${baseUrl}/system_stats`);
+    const response = await fetch(`${baseUrl}/system_stats`, {
+      signal: AbortSignal.timeout(CONNECTIVITY_TIMEOUT_MS),
+    });
     if (response.ok) {
       log.info(`Connectivity test passed — ComfyUI is reachable at ${baseUrl}`);
       return { success: true, message: 'Connected to ComfyUI' };
@@ -424,12 +573,15 @@ export async function generateWithComfyuiImage(
 
   const startTime = Date.now();
 
-  // Resolve maxWidth from the provider's maxResolution (set in image-providers.ts)
-  const maxWidth = IMAGE_PROVIDERS[config.providerId]?.maxResolution?.width ?? DEFAULT_MAX_WIDTH;
+  // Resolve the provider's max resolution (set in image-providers.ts). Both
+  // axes are needed so portrait ratios can be clamped to the bounding box.
+  const maxResolution = IMAGE_PROVIDERS[config.providerId]?.maxResolution;
+  const maxWidth = maxResolution?.width ?? DEFAULT_MAX_WIDTH;
+  const maxHeight = maxResolution?.height ?? DEFAULT_MAX_WIDTH;
 
   // 1. Load and patch the workflow -------------------------------------------
   const workflow = await loadWorkflow(comfyConfig);
-  patchWorkflow(workflow, options, maxWidth);
+  patchWorkflow(workflow, options, maxWidth, maxHeight);
 
   // 2. Client ID for this request --------------------------------------------
   const clientId = `openmaic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -447,6 +599,19 @@ export async function generateWithComfyuiImage(
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     pollCount++;
     entry = await pollHistory(baseUrl, promptId);
+
+    // Fail fast on a runtime execution error. A workflow that errors mid-run
+    // records completed:false with status_str:"error", so without this check
+    // the loop would poll the full timeout and then throw a misleading
+    // "timed out" instead of the real cause.
+    if (entry?.status?.status_str === 'error') {
+      const detail = extractExecutionError(entry);
+      log.error(`Workflow execution error [prompt_id: ${promptId}]${detail ? `: ${detail}` : ''}`);
+      throw new Error(
+        `ComfyUI workflow execution failed (prompt_id: ${promptId})` +
+          (detail ? `: ${detail}` : '. Check the ComfyUI server logs for details.'),
+      );
+    }
 
     if (entry?.status?.completed) {
       log.info(
@@ -501,11 +666,8 @@ export async function generateWithComfyuiImage(
   );
 
   const totalMs = Date.now() - startTime;
-  const dims = options.aspectRatio
-    ? aspectRatioToDimensions(options.aspectRatio, maxWidth)
-    : options.width && options.height
-      ? { width: options.width, height: options.height }
-      : null;
+  // Report the same clamped dimensions that were patched into the workflow.
+  const dims = resolveDimensions(options, maxWidth, maxHeight);
 
   log.info(
     `Image generation complete — ${imageInfo.filename} (${dims?.width ?? options.width ?? 1024}×${dims?.height ?? options.height ?? 1024}) in ${(totalMs / 1000).toFixed(1)}s`,
